@@ -15,7 +15,7 @@ Pushing to `main` runs `.github/workflows/build-firetv-apk.yml`, which builds `d
 
 ### Option B: Local Build & Sideload via ADB
 ```bash
-npm install && npm run build
+npm install --legacy-peer-deps && npm run build
 rm -rf android-tv/app/src/main/assets
 mkdir -p android-tv/app/src/main/assets
 cp -R dist/. android-tv/app/src/main/assets/
