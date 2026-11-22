@@ -15,6 +15,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: build-firetv-apk-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build-apk:
     runs-on: ubuntu-latest
@@ -28,8 +32,20 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Configure Android SDK (API 34)
+        run: |
+          SDK_DIR="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$SDK_DIR" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_DIR" >> "$GITHUB_ENV"
+          SDKMANAGER="$(find "$SDK_DIR/cmdline-tools" -name sdkmanager -type f 2>/dev/null | head -n 1)"
+          if [ -z "$SDKMANAGER" ]; then
+            echo "sdkmanager not found in $SDK_DIR/cmdline-tools"
+            exit 1
+          fi
+          set +o pipefail
+          yes | "$SDKMANAGER" --licenses > /dev/null
+          set -o pipefail
+          "$SDKMANAGER" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -42,11 +58,23 @@ jobs:
           TERMINAL_URL: ${{ github.event.inputs.terminal_url || vars.TERMINAL_URL || 'https://ais-pre-foywkngep6ipdhdrjifkll-853935803100.europe-west2.run.app' }}
         run: gradle assembleDebug assembleRelease -PTERMINAL_URL="$TERMINAL_URL"
 
-      - name: Commit compiled APK to repository
-        if: startsWith(github.ref, 'refs/heads/')
+      - name: Prepare APK output file
         run: |
           mkdir -p android-tv/apk
           cp android-tv/app/build/outputs/apk/release/app-release.apk android-tv/apk/apex-4k-firetv.apk
+
+      - name: Upload Fire TV APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apex-4k-firetv-apk
+          path: |
+            android-tv/apk/apex-4k-firetv.apk
+            android-tv/app/build/outputs/apk/release/*.apk
+            android-tv/app/build/outputs/apk/debug/*.apk
+
+      - name: Commit compiled APK to repository
+        if: startsWith(github.ref, 'refs/heads/')
+        run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add android-tv/apk/apex-4k-firetv.apk
@@ -59,16 +87,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload latest android-tv/apk/apex-4k-firetv.apk --clobber \
-            || gh release create latest android-tv/apk/apex-4k-firetv.apk \
+          TARGET_SHA="$(git rev-parse HEAD)"
+          if gh release view latest >/dev/null 2>&1; then
+            gh release upload latest android-tv/apk/apex-4k-firetv.apk --clobber
+          else
+            gh release create latest android-tv/apk/apex-4k-firetv.apk \
+              --target "$TARGET_SHA" \
               --title "Apex 4K Financial TV — Fire TV APK" \
               --notes "Latest signed Amazon Fire TV Leanback APK wrapper."
-
-      - name: Upload Fire TV APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: apex-4k-firetv-apk
-          path: |
-            android-tv/apk/apex-4k-firetv.apk
-            android-tv/app/build/outputs/apk/release/*.apk
-            android-tv/app/build/outputs/apk/debug/*.apk
+          fi
