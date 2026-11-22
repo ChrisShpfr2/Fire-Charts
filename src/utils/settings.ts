@@ -99,7 +99,7 @@ export const DEFAULT_SETTINGS: TerminalSettings = {
     showWtDivergences: true,
     showRsiDivergences: true,
     showHidden: true,
-    showOnPriceChart: true,
+    showOnPriceChart: false,
     pivotLeft: 5,
     pivotRight: 3,
     maxLookbackBars: 60,

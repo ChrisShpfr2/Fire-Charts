@@ -425,7 +425,7 @@ export function SettingsModal({
             <>
               <ToggleRow
                 label="Show WaveTrend (WT2) Divergences"
-                hint="Detects regular & hidden divergences on VuManChu Cipher B WaveTrend."
+                hint="Detects regular & hidden divergences on VuManChu Cipher B WaveTrend and streams them into the bottom Divergence Banner."
                 checked={settings.divergences.showWtDivergences}
                 onToggle={() =>
                   updateDiv({ showWtDivergences: !settings.divergences.showWtDivergences })
@@ -433,7 +433,7 @@ export function SettingsModal({
               />
               <ToggleRow
                 label="Show RSI Divergences"
-                hint="Detects regular & hidden divergences on Wilder RSI across both Cipher B and RSI panes."
+                hint="Detects regular & hidden divergences on Wilder RSI and streams them into the bottom Divergence Banner."
                 checked={settings.divergences.showRsiDivergences}
                 onToggle={() =>
                   updateDiv({ showRsiDivergences: !settings.divergences.showRsiDivergences })
@@ -441,17 +441,9 @@ export function SettingsModal({
               />
               <ToggleRow
                 label="Include Hidden Divergences"
-                hint="Draws dashed trend-continuation hidden bullish & hidden bearish divergence signals."
+                hint="Includes trend-continuation hidden bullish & hidden bearish divergence blocks in the banner."
                 checked={settings.divergences.showHidden}
                 onToggle={() => updateDiv({ showHidden: !settings.divergences.showHidden })}
-              />
-              <ToggleRow
-                label="Draw Divergence Lines on Price Chart"
-                hint="Projects divergence trendlines directly onto the candlesticks in addition to oscillator panes."
-                checked={settings.divergences.showOnPriceChart}
-                onToggle={() =>
-                  updateDiv({ showOnPriceChart: !settings.divergences.showOnPriceChart })
-                }
               />
               <StepperRow
                 label="Divergence Pivot Left Bars"

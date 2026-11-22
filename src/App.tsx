@@ -3,6 +3,7 @@ import { AlertToastStack, type AlertToastItem } from './components/AlertToastSta
 import { BreakingNewsBar } from './components/BreakingNewsBar';
 import { ChartWindow } from './components/ChartWindow';
 import { DeviceSyncModal } from './components/DeviceSyncModal';
+import { DivergenceBanner } from './components/DivergenceBanner';
 import { IndicatorsModal } from './components/IndicatorsModal';
 import { NewsDetailModal } from './components/NewsDetailModal';
 import { SettingsModal } from './components/SettingsModal';
@@ -36,6 +37,10 @@ import {
   propagateIndicatorsToGroup,
   propagateZoomToGroup,
 } from './utils/sync';
+import {
+  aggregateDivergenceBannerItems,
+  type WindowDivergenceSignal,
+} from './utils/divergenceBanner';
 import type { SyncedWorkspaceState } from './utils/deviceSync';
 import { useDeviceSync } from './utils/useDeviceSync';
 
@@ -271,6 +276,9 @@ export default function App() {
   const [latestPriceByWindow, setLatestPriceByWindow] = useState<
     Record<string, { symbol: string; price: number }>
   >({});
+  const [divergencesByWindow, setDivergencesByWindow] = useState<
+    Record<string, WindowDivergenceSignal[]>
+  >({});
 
   const [focusedWindowId, setFocusedWindowId] = useState<string>(initial.windows[0].id);
   const [maximizedWindowId, setMaximizedWindowId] = useState<string | null>(null);
@@ -428,6 +436,23 @@ export default function App() {
   const gridGeom = useMemo(
     () => getGridGeometry(maximizedWindowId ? 1 : layoutCount),
     [layoutCount, maximizedWindowId]
+  );
+
+  const bannerDivergences = useMemo(
+    () => aggregateDivergenceBannerItems(divergencesByWindow, visibleWindows, 'all', 24),
+    [divergencesByWindow, visibleWindows]
+  );
+
+  const divergenceWindowCount = useMemo(
+    () => visibleWindows.filter((w) => w.indicators.includes('divergences')).length,
+    [visibleWindows]
+  );
+
+  const handleDivergencesUpdate = useCallback(
+    (windowId: string, signals: WindowDivergenceSignal[]) => {
+      setDivergencesByWindow((prev) => ({ ...prev, [windowId]: signals }));
+    },
+    []
   );
 
   const handleZoomChange = useCallback((windowId: string, bars: number) => {
@@ -792,10 +817,19 @@ export default function App() {
               onDeleteAlert={handleDeleteAlert}
               onClearTriggeredAlerts={handleClearTriggeredAlerts}
               onLivePriceUpdate={handleLivePriceUpdate}
+              onDivergencesUpdate={handleDivergencesUpdate}
             />
           );
         })}
       </main>
+
+      {/* 5. Live RSI & WaveTrend Divergence Banner (Off-Chart Block Dock) */}
+      <DivergenceBanner
+        signals={bannerDivergences}
+        focusedWindowId={focusedWindow?.id}
+        activeWindowCount={divergenceWindowCount}
+        onFocusWindow={(winId) => setFocusedWindowId(winId)}
+      />
 
       {/* Modals */}
       {focusedWindow && (

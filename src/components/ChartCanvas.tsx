@@ -12,14 +12,12 @@ import {
   calculateBollingerBands,
   calculateEMA,
   calculateMACD,
-  calculateOscillatorDivergences,
   calculateRSI,
   calculateStochRSI,
   calculateTradersRealityMain,
   calculateVMCMoneyFlowSafe,
   calculateVWAP,
 } from '../utils/chartIndicatorAdapter';
-import type { OscillatorDivergence } from '../utils/indicators';
 
 interface ChartCanvasProps {
   windowId: string;
@@ -171,43 +169,6 @@ export function ChartCanvas({
 
     const atr = has('atr') ? calculateATR(candles, settings.oscillators.atrPeriod) : null;
 
-    const showDivergences = has('divergences');
-    let wtDivergences: OscillatorDivergence[] = [];
-    let rsiDivergences: OscillatorDivergence[] = [];
-
-    if (showDivergences) {
-      const divOpts = {
-        pivotLeft: settings.divergences.pivotLeft,
-        pivotRight: settings.divergences.pivotRight,
-        maxLookbackBars: settings.divergences.maxLookbackBars,
-        includeHidden: settings.divergences.showHidden,
-      };
-      if (settings.divergences.showWtDivergences) {
-        const wtSource =
-          vmcWT ??
-          calculateVMCMoneyFlowSafe.waveTrend(
-            candles,
-            settings.vumanchu.wtChannelLen,
-            settings.vumanchu.wtAverageLen,
-            settings.vumanchu.wtMALen,
-            settings.vumanchu.obLevel1,
-            settings.vumanchu.obLevel2,
-            settings.vumanchu.osLevel1,
-            settings.oscillators.rsiLen,
-            settings.oscillators.stochLen,
-            settings.oscillators.stochKSmooth,
-            settings.oscillators.stochDSmooth
-          );
-        wtDivergences = calculateOscillatorDivergences(candles, wtSource.wt2, 'wt', divOpts);
-      }
-      if (settings.divergences.showRsiDivergences) {
-        const rsiSource =
-          rsi ??
-          calculateRSI(closes, settings.oscillators.rsiLen, settings.oscillators.rsiMaLen);
-        rsiDivergences = calculateOscillatorDivergences(candles, rsiSource.rsi, 'rsi', divOpts);
-      }
-    }
-
     return {
       tr,
       autoFib,
@@ -221,9 +182,6 @@ export function ChartCanvas({
       macd,
       atr,
       showVolume: has('volume'),
-      showDivergences,
-      wtDivergences,
-      rsiDivergences,
     };
   }, [candles, indicators, settings]);
 
@@ -817,103 +775,7 @@ export function ChartCanvas({
       }
     }
 
-    // 9. RSI & WaveTrend Divergences on Main Price Chart
-    const drawDivOverlay = (
-      divs: OscillatorDivergence[],
-      getY1: (d: OscillatorDivergence) => number,
-      getY2: (d: OscillatorDivergence) => number,
-      boundTop: number,
-      boundBottom: number
-    ) => {
-      const visible = divs
-        .filter((d) => d.endIndex >= startIdx && d.startIndex < endIdx)
-        .slice(-6);
-      const placedBoxes: Array<{ x: number; y: number; w: number; h: number }> = [];
-
-      for (const d of visible) {
-        const x1 = idxToX(d.startIndex);
-        const y1 = getY1(d);
-        const x2 = idxToX(d.endIndex);
-        const y2 = getY2(d);
-        const isBull = d.kind === 'bull' || d.kind === 'hidden_bull';
-        const isHidden = d.kind === 'hidden_bull' || d.kind === 'hidden_bear';
-        const color = isBull ? '#22C55E' : '#EF4444';
-
-        ctx.save();
-        ctx.strokeStyle = color;
-        ctx.lineWidth = isHidden ? 1.2 : 1.8;
-        if (isHidden) ctx.setLineDash([4, 3]);
-        ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
-        ctx.stroke();
-        ctx.setLineDash([]);
-
-        for (const [px, py] of [
-          [x1, y1],
-          [x2, y2],
-        ]) {
-          ctx.fillStyle = color;
-          ctx.beginPath();
-          ctx.arc(px, py, 2.8, 0, Math.PI * 2);
-          ctx.fill();
-        }
-
-        const srcTag = d.source === 'wt' ? 'WT' : 'RSI';
-        const kindTag =
-          d.kind === 'bull'
-            ? 'BULL'
-            : d.kind === 'bear'
-            ? 'BEAR'
-            : d.kind === 'hidden_bull'
-            ? 'H.BULL'
-            : 'H.BEAR';
-        const label = compact ? `${srcTag} ${kindTag[0]}` : `${srcTag} ${kindTag}`;
-        ctx.font = 'bold 9px "JetBrains Mono", monospace';
-        const tw = ctx.measureText(label).width;
-        const boxW = tw + 6;
-        const boxH = 12;
-        const lx = Math.max(tw / 2 + 4, Math.min(plotW - tw / 2 - 4, x2));
-        const ly = isBull
-          ? Math.min(boundBottom - 13, y2 + 5)
-          : Math.max(boundTop + 2, y2 - 16);
-        const boxX = lx - tw / 2 - 3;
-
-        const overlaps = placedBoxes.some(
-          (b) =>
-            boxX < b.x + b.w + 4 &&
-            boxX + boxW + 4 > b.x &&
-            ly < b.y + b.h + 2 &&
-            ly + boxH + 2 > b.y
-        );
-
-        if (!overlaps) {
-          placedBoxes.push({ x: boxX, y: ly, w: boxW, h: boxH });
-          ctx.fillStyle = 'rgba(8, 11, 17, 0.90)';
-          ctx.fillRect(boxX, ly, boxW, boxH);
-          ctx.strokeStyle = color;
-          ctx.lineWidth = 0.8;
-          ctx.strokeRect(boxX, ly, boxW, boxH);
-          ctx.fillStyle = isBull ? '#8EE53F' : '#FCA5A5';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'top';
-          ctx.fillText(label, lx, ly + 1.5);
-        }
-        ctx.restore();
-      }
-    };
-
-    if (computed.showDivergences && settings.divergences.showOnPriceChart) {
-      drawDivOverlay(
-        [...computed.wtDivergences, ...computed.rsiDivergences],
-        (d) => priceToY(d.startPrice),
-        (d) => priceToY(d.endPrice),
-        18,
-        mainH - 4
-      );
-    }
-
-    // 10. Price Alert Horizontal Lines & Labels
+    // 9. Price Alert Horizontal Lines & Labels
     const visibleAlerts = alerts.filter(
       (a) => a.status !== 'triggered' || settings.alerts.showTriggeredLines
     );
@@ -1378,62 +1240,6 @@ export function ChartCanvas({
             ctx.fillRect(idxToX(i) - segW / 2, ribbonY - 2, segW, 3.5);
           }
         }
-
-        if (computed.showDivergences) {
-          const paneDivs = [
-            ...computed.wtDivergences.filter((d) => d.endIndex >= startIdx && d.startIndex < endIdx).slice(-4),
-            ...(settings.vumanchu.showRsiInPane
-              ? computed.rsiDivergences.filter((d) => d.endIndex >= startIdx && d.startIndex < endIdx).slice(-4)
-              : []),
-          ];
-          const placed: Array<{ x: number; y: number; w: number; h: number }> = [];
-          for (const d of paneDivs) {
-            const x1 = idxToX(d.startIndex);
-            const y1 = valToY(d.startOsc);
-            const x2 = idxToX(d.endIndex);
-            const y2 = valToY(d.endOsc);
-            const isBull = d.kind === 'bull' || d.kind === 'hidden_bull';
-            const isHidden = d.kind === 'hidden_bull' || d.kind === 'hidden_bear';
-            const color = isBull ? '#22C55E' : '#EF4444';
-            ctx.save();
-            ctx.strokeStyle = color;
-            ctx.lineWidth = isHidden ? 1.2 : 1.7;
-            if (isHidden) ctx.setLineDash([3, 3]);
-            ctx.beginPath();
-            ctx.moveTo(x1, y1);
-            ctx.lineTo(x2, y2);
-            ctx.stroke();
-            ctx.setLineDash([]);
-            ctx.fillStyle = color;
-            ctx.beginPath();
-            ctx.arc(x1, y1, 2.4, 0, Math.PI * 2);
-            ctx.arc(x2, y2, 2.8, 0, Math.PI * 2);
-            ctx.fill();
-            if (!compact) {
-              const badge = `${d.source === 'wt' ? 'WT' : 'RSI'} ${
-                d.kind === 'bull' ? 'BULL' : d.kind === 'bear' ? 'BEAR' : isBull ? 'H.B' : 'H.S'
-              }`;
-              ctx.font = 'bold 8px "JetBrains Mono", monospace';
-              const tw = ctx.measureText(badge).width;
-              const bx = Math.max(tw / 2 + 4, Math.min(plotW - tw / 2 - 4, x2));
-              const by = isBull ? Math.min(topY + subH - 14, y2 + 4) : Math.max(topY + 14, y2 - 12);
-              const boxX = bx - tw / 2 - 2;
-              const overlaps = placed.some(
-                (p) => boxX < p.x + p.w + 3 && boxX + tw + 7 > p.x && by < p.y + p.h + 2 && by + 12 > p.y
-              );
-              if (!overlaps) {
-                placed.push({ x: boxX, y: by, w: tw + 4, h: 10 });
-                ctx.fillStyle = 'rgba(8, 11, 17, 0.88)';
-                ctx.fillRect(boxX, by, tw + 4, 10);
-                ctx.fillStyle = isBull ? '#8EE53F' : '#FCA5A5';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'top';
-                ctx.fillText(badge, bx, by + 1);
-              }
-            }
-            ctx.restore();
-          }
-        }
       } else if (paneType === 'stoch_rsi' && computed.stochRsi) {
         const y80 = topY + subH - 6 - 0.8 * (subH - 14);
         const y20 = topY + subH - 6 - 0.2 * (subH - 14);
@@ -1448,65 +1254,6 @@ export function ChartCanvas({
         ctx.fillRect(0, y70, plotW, y30 - y70);
         drawSubSeries(computed.rsi.rsi, 0, 100, '#C084FC', 1.6);
         drawSubSeries(computed.rsi.ma, 0, 100, '#FACC15', 1.2);
-
-        if (computed.showDivergences && computed.rsiDivergences.length > 0) {
-          const valToY = (v: number) => topY + subH - 6 - (v / 100) * (subH - 14);
-          const visibleRsi = computed.rsiDivergences
-            .filter((d) => d.endIndex >= startIdx && d.startIndex < endIdx)
-            .slice(-5);
-          const placed: Array<{ x: number; y: number; w: number; h: number }> = [];
-          for (const d of visibleRsi) {
-            const x1 = idxToX(d.startIndex);
-            const y1 = valToY(d.startOsc);
-            const x2 = idxToX(d.endIndex);
-            const y2 = valToY(d.endOsc);
-            const isBull = d.kind === 'bull' || d.kind === 'hidden_bull';
-            const isHidden = d.kind === 'hidden_bull' || d.kind === 'hidden_bear';
-            const color = isBull ? '#22C55E' : '#EF4444';
-            ctx.save();
-            ctx.strokeStyle = color;
-            ctx.lineWidth = isHidden ? 1.2 : 1.7;
-            if (isHidden) ctx.setLineDash([3, 3]);
-            ctx.beginPath();
-            ctx.moveTo(x1, y1);
-            ctx.lineTo(x2, y2);
-            ctx.stroke();
-            ctx.setLineDash([]);
-            ctx.fillStyle = color;
-            ctx.beginPath();
-            ctx.arc(x1, y1, 2.4, 0, Math.PI * 2);
-            ctx.arc(x2, y2, 2.8, 0, Math.PI * 2);
-            ctx.fill();
-            if (!compact) {
-              const badge =
-                d.kind === 'bull'
-                  ? 'BULL'
-                  : d.kind === 'bear'
-                  ? 'BEAR'
-                  : isBull
-                  ? 'H.BULL'
-                  : 'H.BEAR';
-              ctx.font = 'bold 8px "JetBrains Mono", monospace';
-              const tw = ctx.measureText(badge).width;
-              const bx = Math.max(tw / 2 + 4, Math.min(plotW - tw / 2 - 4, x2));
-              const by = isBull ? Math.min(topY + subH - 13, y2 + 3) : Math.max(topY + 14, y2 - 11);
-              const boxX = bx - tw / 2 - 2;
-              const overlaps = placed.some(
-                (p) => boxX < p.x + p.w + 3 && boxX + tw + 7 > p.x && by < p.y + p.h + 2 && by + 12 > p.y
-              );
-              if (!overlaps) {
-                placed.push({ x: boxX, y: by, w: tw + 4, h: 10 });
-                ctx.fillStyle = 'rgba(8, 11, 17, 0.88)';
-                ctx.fillRect(boxX, by, tw + 4, 10);
-                ctx.fillStyle = isBull ? '#8EE53F' : '#FCA5A5';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'top';
-                ctx.fillText(badge, bx, by + 1);
-              }
-            }
-            ctx.restore();
-          }
-        }
       } else if (paneType === 'macd' && computed.macd) {
         let maxAbs = 0.0001;
         for (let i = startIdx; i < endIdx; i++) {
@@ -1696,15 +1443,6 @@ export function ChartCanvas({
     return candles[idx] ?? candles[candles.length - 1];
   }, [hoverPos, candles, layout]);
 
-  const recentDivergences = useMemo(() => {
-    if (!computed.showDivergences) return [];
-    const all = [...computed.wtDivergences, ...computed.rsiDivergences];
-    return all
-      .filter((d) => d.endIndex >= layout.startIdx && d.endIndex < layout.endIdx)
-      .sort((a, b) => b.endIndex - a.endIndex)
-      .slice(0, 3);
-  }, [computed.showDivergences, computed.wtDivergences, computed.rsiDivergences, layout.startIdx, layout.endIdx]);
-
   return (
     <div ref={containerRef} className="relative w-full h-full overflow-hidden">
       <canvas
@@ -1729,60 +1467,20 @@ export function ChartCanvas({
       )}
 
       {hoveredCandle && (
-        <div className="pointer-events-none absolute top-1.5 left-2 flex flex-col items-start gap-1">
-          <div className="flex items-center gap-2 text-[10px] font-mono-num text-slate-300 bg-[#080B11]/80 px-1.5 py-0.5 rounded">
-            <span>O {formatPrice(hoveredCandle.open)}</span>
-            <span>H {formatPrice(hoveredCandle.high)}</span>
-            <span>L {formatPrice(hoveredCandle.low)}</span>
-            <span
-              style={{
-                color:
-                  hoveredCandle.close >= hoveredCandle.open
-                    ? settings.candles.upColor
-                    : settings.candles.downColor,
-              }}
-            >
-              C {formatPrice(hoveredCandle.close)}
-            </span>
-          </div>
-
-          {!compact && computed.showDivergences && (
-            <div
-              className="flex flex-wrap items-center gap-1"
-              data-testid={`divergence-radar-${windowId}`}
-            >
-              {recentDivergences.length > 0 ? (
-                recentDivergences.map((d) => {
-                  const isBull = d.kind === 'bull' || d.kind === 'hidden_bull';
-                  const barsAgo = Math.max(0, candles.length - 1 - d.endIndex);
-                  const kindName =
-                    d.kind === 'bull'
-                      ? 'BULL'
-                      : d.kind === 'bear'
-                      ? 'BEAR'
-                      : d.kind === 'hidden_bull'
-                      ? 'H.BULL'
-                      : 'H.BEAR';
-                  return (
-                    <span
-                      key={`${d.source}-${d.kind}-${d.startIndex}-${d.endIndex}`}
-                      className={`px-1.5 py-0.5 rounded text-[9px] font-mono-num font-bold border ${
-                        isBull
-                          ? 'bg-[#8EE53F]/15 text-[#8EE53F] border-[#8EE53F]/45'
-                          : 'bg-red-500/15 text-red-300 border-red-500/45'
-                      }`}
-                    >
-                      {d.source === 'wt' ? 'WT' : 'RSI'} {kindName} · {barsAgo}b
-                    </span>
-                  );
-                })
-              ) : (
-                <span className="px-1.5 py-0.5 rounded text-[9px] font-mono-num text-slate-400 bg-[#080B11]/75 border border-slate-800">
-                  RSI/WT Div: Scanning
-                </span>
-              )}
-            </div>
-          )}
+        <div className="pointer-events-none absolute top-1.5 left-2 flex items-center gap-2 text-[10px] font-mono-num text-slate-300 bg-[#080B11]/80 px-1.5 py-0.5 rounded">
+          <span>O {formatPrice(hoveredCandle.open)}</span>
+          <span>H {formatPrice(hoveredCandle.high)}</span>
+          <span>L {formatPrice(hoveredCandle.low)}</span>
+          <span
+            style={{
+              color:
+                hoveredCandle.close >= hoveredCandle.open
+                  ? settings.candles.upColor
+                  : settings.candles.downColor,
+            }}
+          >
+            C {formatPrice(hoveredCandle.close)}
+          </span>
         </div>
       )}
     </div>

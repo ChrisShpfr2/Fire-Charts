@@ -29,8 +29,8 @@ export const INDICATOR_CATALOG: IndicatorDefinition[] = [
     category: 'Pine Suite',
     pane: 'main',
     description:
-      'Detects Regular & Hidden Bullish/Bearish divergences on both RSI (14) and VuManChu WaveTrend (WT2), drawing price & oscillator divergence lines plus live radar signals.',
-    paramsLabel: 'RSI + WT2 · Bull / Bear / Hidden',
+      'Detects Regular & Hidden Bullish/Bearish divergences on both RSI (14) and VuManChu WaveTrend (WT2), displaying live alert blocks in the bottom Divergence Banner (keeping charts clean).',
+    paramsLabel: 'RSI + WT2 · Banner Blocks',
   },
   {
     id: 'vumanchu_wavetrend',

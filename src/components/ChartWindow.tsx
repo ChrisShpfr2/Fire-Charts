@@ -6,7 +6,7 @@ import {
   Maximize2,
   Minimize2,
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   AlertCondition,
   Candle,
@@ -19,6 +19,11 @@ import type {
   WindowSyncConfig,
 } from '../types/trading';
 import { inferAlertCondition } from '../utils/alerts';
+import {
+  buildDivergenceSignature,
+  computeWindowDivergences,
+  type WindowDivergenceSignal,
+} from '../utils/divergenceBanner';
 import { ChartCanvas } from './ChartCanvas';
 import { PriceAlertOverlay } from './PriceAlertOverlay';
 
@@ -53,6 +58,7 @@ interface ChartWindowProps {
     prevPrice: number | null,
     currentPrice: number
   ) => void;
+  onDivergencesUpdate: (windowId: string, signals: WindowDivergenceSignal[]) => void;
 }
 
 const SYNC_ORDER: SyncGroup[] = ['none', 'A', 'B', 'C'];
@@ -93,6 +99,7 @@ export function ChartWindow({
   onDeleteAlert,
   onClearTriggeredAlerts,
   onLivePriceUpdate,
+  onDivergencesUpdate,
 }: ChartWindowProps) {
   const [candles, setCandles] = useState<Candle[]>([]);
   const [resolvedSymbol, setResolvedSymbol] = useState(config.symbol);
@@ -161,6 +168,39 @@ export function ChartWindow({
       ? ((last.close - baseCandle.open) / baseCandle.open) * 100
       : 0;
   const isPctUp = pctChange >= 0;
+
+  const divergencesEnabled = config.indicators.includes('divergences');
+  const computedDivergences = useMemo(
+    () =>
+      computeWindowDivergences({
+        windowId: config.id,
+        windowIndex: config.index,
+        symbol: resolvedSymbol || config.symbol,
+        timeframe: config.timeframe,
+        candles,
+        enabled: divergencesEnabled,
+        settings,
+      }),
+    [
+      config.id,
+      config.index,
+      config.symbol,
+      config.timeframe,
+      resolvedSymbol,
+      candles,
+      divergencesEnabled,
+      settings,
+    ]
+  );
+
+  const lastDivSigRef = useRef<string>('');
+  useEffect(() => {
+    const sig = buildDivergenceSignature(computedDivergences);
+    if (sig !== lastDivSigRef.current) {
+      lastDivSigRef.current = sig;
+      onDivergencesUpdate(config.id, computedDivergences);
+    }
+  }, [config.id, computedDivergences, onDivergencesUpdate]);
 
   const activeAlertCount = alerts.filter((a) => a.status === 'active').length;
   const triggeredAlertCount = alerts.filter((a) => a.status === 'triggered').length;
