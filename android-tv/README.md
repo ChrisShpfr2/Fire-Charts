@@ -19,3 +19,7 @@ gradle assembleRelease -PTERMINAL_URL=https://YOUR_HOSTED_APP_URL
 adb connect <FIRE_TV_IP>:5555
 adb install -r app/build/outputs/apk/release/app-release.apk
 ```
+
+## Troubleshooting `404 Page not found` on Fire TV
+- The default embedded URL (`https://ais-pre-foywkngep6ipdhdrjifkll-853935803100.europe-west2.run.app`) only responds once you **Share / Deploy** the app in Google AI Studio.
+- On the updated APK, pressing the **Menu** button on the Fire TV remote (or hitting a 404/network error) opens a **Server URL** dialog so you can type and save any live deployed or local LAN URL without rebuilding the APK.
