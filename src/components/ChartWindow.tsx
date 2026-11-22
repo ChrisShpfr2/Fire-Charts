@@ -12,13 +12,13 @@ import type {
   Candle,
   ChartWindowConfig,
   DataSourceTag,
-  KlinesResponse,
   PriceAlert,
   SyncGroup,
   TerminalSettings,
   WindowSyncConfig,
 } from '../types/trading';
 import { inferAlertCondition } from '../utils/alerts';
+import { fetchWindowKlines } from '../utils/clientDataApi';
 import {
   buildDivergenceSignature,
   computeWindowDivergences,
@@ -125,11 +125,11 @@ export function ChartWindow({
 
     async function load() {
       try {
-        const res = await fetch(
-          `/api/klines?symbol=${encodeURIComponent(config.symbol)}&assetType=${config.assetType}&timeframe=${config.timeframe}`
-        );
-        if (!res.ok) throw new Error('Failed to load chart data');
-        const data = (await res.json()) as KlinesResponse;
+        const data = await fetchWindowKlines({
+          symbol: config.symbol,
+          assetType: config.assetType,
+          timeframe: config.timeframe,
+        });
         if (!active) return;
         const nextCandles = data.candles ?? [];
         setCandles(nextCandles);

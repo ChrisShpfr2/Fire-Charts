@@ -30,6 +30,11 @@ import {
   getAlertsForWindow,
   playAlertChime,
 } from './utils/alerts';
+import {
+  fetchBreakingNewsArticles,
+  fetchSymbolsCatalog,
+  fetchTickerTapeItems,
+} from './utils/clientDataApi';
 import { DEFAULT_SETTINGS, mergeTerminalSettings } from './utils/settings';
 import {
   canonicalSymbolKey,
@@ -364,9 +369,8 @@ export default function App() {
 
   // Fetch symbols catalog
   useEffect(() => {
-    fetch('/api/symbols')
-      .then((r) => r.json())
-      .then((data: { stocks?: SymbolOption[]; crypto?: SymbolOption[] }) => {
+    fetchSymbolsCatalog()
+      .then((data) => {
         setStockCatalog(data.stocks ?? []);
         setCryptoCatalog(data.crypto ?? []);
       })
@@ -378,9 +382,8 @@ export default function App() {
     let active = true;
     const load = async () => {
       try {
-        const res = await fetch('/api/ticker-tape');
-        const data = (await res.json()) as { items?: TickerTapeItem[] };
-        if (active && data.items) setTickerItems(data.items);
+        const items = await fetchTickerTapeItems();
+        if (active && items) setTickerItems(items);
       } catch {
         // Keep last ticker items
       } finally {
@@ -400,9 +403,8 @@ export default function App() {
     let active = true;
     const load = async () => {
       try {
-        const res = await fetch('/api/news');
-        const data = (await res.json()) as { items?: NewsArticle[] };
-        if (active && data.items) setNewsArticles(data.items);
+        const items = await fetchBreakingNewsArticles();
+        if (active && items) setNewsArticles(items);
       } catch {
         // Keep last articles
       } finally {
@@ -874,7 +876,10 @@ export default function App() {
         connectedCount={deviceSync.connectedCount}
         revision={deviceSync.revision}
         autoSyncEnabled={deviceSync.autoSyncEnabled}
+        isStandalone={deviceSync.isStandalone}
+        customSyncServerUrl={deviceSync.customSyncServerUrl}
         onChangeRoomId={deviceSync.setRoomId}
+        onChangeCustomSyncServerUrl={deviceSync.setCustomSyncServerUrl}
         onToggleAutoSync={deviceSync.toggleAutoSync}
         onPushWorkspaceNow={deviceSync.pushWorkspaceNow}
         onPushAppReload={deviceSync.pushAppReloadToAllDevices}

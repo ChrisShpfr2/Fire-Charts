@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { isStandaloneNativeApp } from './clientDataApi';
 import {
   buildWsUrlFromLocation,
   sanitizeRoomId,
@@ -10,6 +11,7 @@ import {
 const DEVICE_ID_STORAGE_KEY = 'apex-tv-4k-device-id';
 const ROOM_STORAGE_KEY = 'apex-tv-4k-sync-room';
 const AUTO_SYNC_STORAGE_KEY = 'apex-tv-4k-auto-sync';
+const CUSTOM_SYNC_SERVER_KEY = 'apex-tv-4k-sync-server-url';
 
 function getOrCreateDeviceId(): string {
   try {
@@ -48,6 +50,49 @@ function getInitialAutoSync(): boolean {
   }
 }
 
+export function normalizeSyncServerUrl(raw?: string | null): string {
+  const trimmed = String(raw ?? '').trim().replace(/\/+$/, '');
+  if (!trimmed) return '';
+  if (
+    trimmed.startsWith('http://') ||
+    trimmed.startsWith('https://') ||
+    trimmed.startsWith('ws://') ||
+    trimmed.startsWith('wss://')
+  ) {
+    return trimmed;
+  }
+  return '';
+}
+
+function getInitialCustomSyncServerUrl(): string {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const fromUrl = normalizeSyncServerUrl(params.get('syncServer'));
+    if (fromUrl) {
+      localStorage.setItem(CUSTOM_SYNC_SERVER_KEY, fromUrl);
+      return fromUrl;
+    }
+    return normalizeSyncServerUrl(localStorage.getItem(CUSTOM_SYNC_SERVER_KEY));
+  } catch {
+    return '';
+  }
+}
+
+function buildTargetWsUrl(customServerUrl: string): string | null {
+  if (customServerUrl) {
+    if (customServerUrl.startsWith('ws://') || customServerUrl.startsWith('wss://')) {
+      return customServerUrl.endsWith('/ws') ? customServerUrl : `${customServerUrl}/ws`;
+    }
+    const parsed = new URL(customServerUrl);
+    const wsProto = parsed.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${wsProto}//${parsed.host}/ws`;
+  }
+  if (isStandaloneNativeApp()) {
+    return null;
+  }
+  return buildWsUrlFromLocation(window.location);
+}
+
 export interface OtaUpdateNotice {
   version: string;
   reason: string;
@@ -65,9 +110,13 @@ export function useDeviceSync({
   onApplyRemoteState,
   onRemoteSyncNotice,
 }: UseDeviceSyncOptions) {
+  const isStandalone = isStandaloneNativeApp();
   const [deviceId] = useState<string>(() => getOrCreateDeviceId());
   const [roomId, setRoomIdState] = useState<string>(() => getInitialRoomId());
   const [autoSyncEnabled, setAutoSyncEnabled] = useState<boolean>(() => getInitialAutoSync());
+  const [customSyncServerUrl, setCustomSyncServerUrlState] = useState<string>(() =>
+    getInitialCustomSyncServerUrl()
+  );
   const [connected, setConnected] = useState(false);
   const [connectedCount, setConnectedCount] = useState(1);
   const [revision, setRevision] = useState(0);
@@ -90,6 +139,20 @@ export function useDeviceSync({
     setRoomIdState(clean);
     try {
       localStorage.setItem(ROOM_STORAGE_KEY, clean);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const setCustomSyncServerUrl = useCallback((nextUrl: string) => {
+    const clean = normalizeSyncServerUrl(nextUrl);
+    setCustomSyncServerUrlState(clean);
+    try {
+      if (clean) {
+        localStorage.setItem(CUSTOM_SYNC_SERVER_KEY, clean);
+      } else {
+        localStorage.removeItem(CUSTOM_SYNC_SERVER_KEY);
+      }
     } catch {
       // ignore
     }
@@ -126,15 +189,27 @@ export function useDeviceSync({
     return () => clearTimeout(timer);
   }, [otaUpdateNotice]);
 
-  // Connect WebSocket with auto-reconnect
+  // Connect WebSocket with auto-reconnect (skipped in standalone mode unless custom server URL is set)
   useEffect(() => {
+    let wsUrl: string | null = null;
+    try {
+      wsUrl = buildTargetWsUrl(customSyncServerUrl);
+    } catch {
+      wsUrl = null;
+    }
+
+    if (!wsUrl) {
+      setConnected(false);
+      setConnectedCount(1);
+      return;
+    }
+
     let disposed = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let backoffMs = 1000;
 
     const connect = () => {
-      if (disposed) return;
-      const wsUrl = buildWsUrlFromLocation(window.location);
+      if (disposed || !wsUrl) return;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
@@ -237,7 +312,7 @@ export function useDeviceSync({
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [roomId, deviceId, triggerOtaReloadFlow]);
+  }, [roomId, deviceId, customSyncServerUrl, triggerOtaReloadFlow]);
 
   // Broadcast local workspace state changes (debounced, skipping remote updates)
   const patchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -309,6 +384,9 @@ export function useDeviceSync({
 
   return {
     deviceId,
+    isStandalone,
+    customSyncServerUrl,
+    setCustomSyncServerUrl,
     roomId,
     setRoomId,
     autoSyncEnabled,

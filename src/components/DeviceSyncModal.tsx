@@ -19,7 +19,10 @@ interface DeviceSyncModalProps {
   connectedCount: number;
   revision: number;
   autoSyncEnabled: boolean;
+  isStandalone: boolean;
+  customSyncServerUrl: string;
   onChangeRoomId: (room: string) => void;
+  onChangeCustomSyncServerUrl: (url: string) => void;
   onToggleAutoSync: (enabled: boolean) => void;
   onPushWorkspaceNow: () => boolean;
   onPushAppReload: () => boolean;
@@ -33,21 +36,31 @@ export function DeviceSyncModal({
   connectedCount,
   revision,
   autoSyncEnabled,
+  isStandalone,
+  customSyncServerUrl,
   onChangeRoomId,
+  onChangeCustomSyncServerUrl,
   onToggleAutoSync,
   onPushWorkspaceNow,
   onPushAppReload,
   onClose,
 }: DeviceSyncModalProps) {
   const [roomInput, setRoomInput] = useState(roomId);
+  const [syncServerInput, setSyncServerInput] = useState(customSyncServerUrl);
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
-  const pairingUrl = `${window.location.origin}/?room=${encodeURIComponent(roomId)}`;
+  const baseSyncOrigin = isStandalone
+    ? customSyncServerUrl.replace(/\/+$/, '')
+    : window.location.origin;
+  const pairingUrl = baseSyncOrigin
+    ? `${baseSyncOrigin}/?room=${encodeURIComponent(roomId)}`
+    : '';
 
   const handleCopyUrl = async () => {
+    if (!pairingUrl) return;
     try {
       await navigator.clipboard.writeText(pairingUrl);
       setCopiedUrl(true);
@@ -65,11 +78,24 @@ export function DeviceSyncModal({
     setFeedback(`Switched to sync channel "${clean}".`);
   };
 
+  const handleApplySyncServer = (e: React.FormEvent) => {
+    e.preventDefault();
+    onChangeCustomSyncServerUrl(syncServerInput);
+    const trimmed = syncServerInput.trim();
+    setFeedback(
+      trimmed
+        ? `Remote sync server set to "${trimmed}".`
+        : 'Cleared remote sync server (running standalone).'
+    );
+  };
+
   const handlePushState = () => {
     const ok = onPushWorkspaceNow();
     setFeedback(
       ok
         ? 'Layout, indicators, settings, and price alerts pushed to all connected devices.'
+        : isStandalone && !customSyncServerUrl
+        ? 'Running in standalone Fire TV mode. Enter a remote sync server URL below to sync across TVs.'
         : 'Waiting for WebSocket connection to push changes.'
     );
   };
@@ -79,9 +105,13 @@ export function DeviceSyncModal({
     setFeedback(
       ok
         ? 'OTA refresh signal broadcast to all connected Fire TVs & browsers.'
+        : isStandalone && !customSyncServerUrl
+        ? 'Running in standalone Fire TV mode. Enter a remote sync server URL below to broadcast.'
         : 'Waiting for WebSocket connection to push update.'
     );
   };
+
+  const standaloneNoSync = isStandalone && !customSyncServerUrl;
 
   return (
     <div
@@ -100,10 +130,12 @@ export function DeviceSyncModal({
             <MonitorSmartphone className="w-5 h-5 text-[#8EE53F]" />
             <div>
               <h2 className="font-display font-bold text-lg text-white">
-                Multi-Device Push Sync &amp; Fire TV APK
+                Multi-Device Push Sync &amp; Fire TV Mode
               </h2>
               <p className="text-xs text-slate-400">
-                Real-time WebSocket state &amp; OTA update push across all Fire TVs and browsers.
+                {isStandalone
+                  ? 'Running natively on Fire TV with direct market & news feeds.'
+                  : 'Real-time WebSocket state & OTA update push across all Fire TVs and browsers.'}
               </p>
             </div>
           </div>
@@ -128,12 +160,22 @@ export function DeviceSyncModal({
               )}
               <div>
                 <div className="text-sm font-semibold text-white">
-                  {connected ? 'Live Push Bus Connected' : 'Reconnecting to Push Bus…'}
+                  {connected
+                    ? 'Live Push Bus Connected'
+                    : standaloneNoSync
+                    ? 'Standalone Native Fire TV Mode'
+                    : 'Reconnecting to Push Bus…'}
                 </div>
                 <div className="text-xs font-mono-num text-slate-400">
-                  Channel: <strong className="text-sky-300">{roomId}</strong> ·{' '}
-                  <strong className="text-[#8EE53F]">{connectedCount}</strong> active device
-                  {connectedCount === 1 ? '' : 's'} · rev #{revision}
+                  {standaloneNoSync ? (
+                    <span>Direct Binance, Yahoo Finance &amp; RSS feeds active (no external server required)</span>
+                  ) : (
+                    <>
+                      Channel: <strong className="text-sky-300">{roomId}</strong> ·{' '}
+                      <strong className="text-[#8EE53F]">{connectedCount}</strong> active device
+                      {connectedCount === 1 ? '' : 's'} · rev #{revision}
+                    </>
+                  )}
                 </div>
               </div>
             </div>
@@ -182,6 +224,34 @@ export function DeviceSyncModal({
             </div>
           )}
 
+          {/* Optional Remote Sync Server URL when running natively inside Fire TV APK */}
+          {isStandalone && (
+            <form
+              onSubmit={handleApplySyncServer}
+              className="p-3.5 rounded-lg bg-[#0B0F17] border border-slate-800 space-y-2"
+            >
+              <label htmlFor="custom-sync-server-input" className="block text-xs font-semibold text-slate-300">
+                Optional Remote Sync Server URL (leave blank for standalone Fire TV mode)
+              </label>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  id="custom-sync-server-input"
+                  type="url"
+                  value={syncServerInput}
+                  onChange={(e) => setSyncServerInput(e.target.value)}
+                  placeholder="https://your-live-terminal-url"
+                  className="tv-focusable flex-1 min-w-[200px] bg-[#111827] border border-slate-700 rounded px-2.5 py-1.5 text-xs font-mono-num text-white focus:border-sky-400 outline-none"
+                />
+                <button
+                  type="submit"
+                  className="tv-focusable px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white cursor-pointer"
+                >
+                  Save Server
+                </button>
+              </div>
+            </form>
+          )}
+
           {/* Sync Channel & Pairing Link */}
           <div className="p-3.5 rounded-lg bg-[#0B0F17] border border-slate-800 space-y-2.5">
             <form onSubmit={handleApplyRoom} className="flex flex-wrap items-center gap-2">
@@ -204,37 +274,40 @@ export function DeviceSyncModal({
               </button>
             </form>
 
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                readOnly
-                value={pairingUrl}
-                aria-label="Device pairing URL"
-                className="flex-1 min-w-0 bg-[#111827] border border-slate-800 rounded px-2.5 py-1.5 text-[11px] font-mono-num text-slate-300"
-              />
-              <button
-                type="button"
-                onClick={handleCopyUrl}
-                className="tv-focusable flex items-center gap-1 px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 cursor-pointer shrink-0"
-              >
-                {copiedUrl ? <Check className="w-3.5 h-3.5 text-[#8EE53F]" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{copiedUrl ? 'Copied' : 'Copy URL'}</span>
-              </button>
-            </div>
+            {pairingUrl && (
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  readOnly
+                  value={pairingUrl}
+                  aria-label="Device pairing URL"
+                  className="flex-1 min-w-0 bg-[#111827] border border-slate-800 rounded px-2.5 py-1.5 text-[11px] font-mono-num text-slate-300"
+                />
+                <button
+                  type="button"
+                  onClick={handleCopyUrl}
+                  className="tv-focusable flex items-center gap-1 px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 cursor-pointer shrink-0"
+                >
+                  {copiedUrl ? (
+                    <Check className="w-3.5 h-3.5 text-[#8EE53F]" />
+                  ) : (
+                    <Copy className="w-3.5 h-3.5" />
+                  )}
+                  <span>{copiedUrl ? 'Copied' : 'Copy URL'}</span>
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Fire TV APK Packaging Info */}
           <div className="p-3.5 rounded-lg bg-[#0B0F17] border border-amber-400/35 space-y-2">
             <div className="flex items-center gap-2 text-xs font-bold text-amber-300">
               <Tv className="w-4 h-4" />
-              <span>Amazon Fire TV APK Wrapper &amp; Auto-CI Build</span>
+              <span>Standalone Fire TV APK &amp; Auto-CI Build</span>
             </div>
             <p className="text-xs text-slate-300 leading-relaxed">
-              This container runs the web terminal directly (Android SDK is not installed here to pre-compile a binary{' '}
-              <code className="text-amber-200">.apk</code>). A complete Fire TV Leanback WebView Android project is included under{' '}
-              <code className="text-sky-300">android-tv/</code> along with a GitHub Actions workflow (
-              <code className="text-sky-300">.github/workflows/build-firetv-apk.yml</code>) that builds the{' '}
-              <code className="text-amber-200">.apk</code> on Git push. Because the Fire TV APK loads this live terminal URL over WebSockets, any chart, alert, or app code updates pushed to the server appear on all connected Fire TVs automatically without re-sideloading.
+              The GitHub Actions workflow (<code className="text-sky-300">.github/workflows/build-firetv-apk.yml</code>) bundles the compiled terminal UI directly inside{' '}
+              <code className="text-amber-200">android-tv/apk/apex-4k-firetv.apk</code> so the Fire TV app boots locally without depending on any external Cloud Run URL, while pulling live market candles, ticker quotes, and breaking news straight from upstream feeds. Press the Fire TV remote <strong>Menu</strong> button anytime to switch between bundled standalone mode and a custom server URL.
             </p>
           </div>
         </div>

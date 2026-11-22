@@ -9,3 +9,5 @@ coverage/
 .apex-sync-state.json
 android-tv/.gradle/
 android-tv/app/build/
+android-tv/app/src/main/assets/
+
