@@ -6,3 +6,6 @@ coverage/
 *.log
 .env*
 !.env.example
+.apex-sync-state.json
+android-tv/.gradle/
+android-tv/app/build/

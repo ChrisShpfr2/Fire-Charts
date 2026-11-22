@@ -1,24 +1,31 @@
 import {
   Activity,
+  Bell,
+  BellRing,
   Link2,
   Maximize2,
   Minimize2,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type {
+  AlertCondition,
   Candle,
   ChartWindowConfig,
   DataSourceTag,
   KlinesResponse,
+  PriceAlert,
   SyncGroup,
   TerminalSettings,
   WindowSyncConfig,
 } from '../types/trading';
+import { inferAlertCondition } from '../utils/alerts';
 import { ChartCanvas } from './ChartCanvas';
+import { PriceAlertOverlay } from './PriceAlertOverlay';
 
 interface ChartWindowProps {
   config: ChartWindowConfig;
   settings: TerminalSettings;
+  alerts: PriceAlert[];
   resetOffsetSignal: number;
   isFocused: boolean;
   isMaximized: boolean;
@@ -31,6 +38,21 @@ interface ChartWindowProps {
   onUpdateSync: (sync: WindowSyncConfig) => void;
   onZoomBarsChange: (bars: number) => void;
   onCrosshairTimeChange: (time: number | null) => void;
+  onCreateAlert: (
+    windowId: string,
+    symbol: string,
+    input: { targetPrice: number; condition: AlertCondition; note?: string }
+  ) => void;
+  onTogglePauseAlert: (alertId: string) => void;
+  onRearmAlert: (alertId: string) => void;
+  onDeleteAlert: (alertId: string) => void;
+  onClearTriggeredAlerts: (windowId: string, symbol: string) => void;
+  onLivePriceUpdate: (
+    windowId: string,
+    symbol: string,
+    prevPrice: number | null,
+    currentPrice: number
+  ) => void;
 }
 
 const SYNC_ORDER: SyncGroup[] = ['none', 'A', 'B', 'C'];
@@ -52,6 +74,7 @@ function formatSourceTag(source: DataSourceTag): string {
 export function ChartWindow({
   config,
   settings,
+  alerts,
   resetOffsetSignal,
   isFocused,
   isMaximized,
@@ -64,11 +87,31 @@ export function ChartWindow({
   onUpdateSync,
   onZoomBarsChange,
   onCrosshairTimeChange,
+  onCreateAlert,
+  onTogglePauseAlert,
+  onRearmAlert,
+  onDeleteAlert,
+  onClearTriggeredAlerts,
+  onLivePriceUpdate,
 }: ChartWindowProps) {
   const [candles, setCandles] = useState<Candle[]>([]);
   const [resolvedSymbol, setResolvedSymbol] = useState(config.symbol);
   const [sourceTag, setSourceTag] = useState<DataSourceTag>('binance-spot');
   const [loading, setLoading] = useState(true);
+  const [alertOverlayOpen, setAlertOverlayOpen] = useState(false);
+  const [alertPickMode, setAlertPickMode] = useState(false);
+
+  const prevPriceRef = useRef<{ symbol: string; price: number | null }>({
+    symbol: config.symbol,
+    price: null,
+  });
+
+  useEffect(() => {
+    setAlertPickMode(false);
+    if (prevPriceRef.current.symbol !== config.symbol) {
+      prevPriceRef.current = { symbol: config.symbol, price: null };
+    }
+  }, [config.symbol, config.timeframe]);
 
   useEffect(() => {
     let active = true;
@@ -81,9 +124,18 @@ export function ChartWindow({
         if (!res.ok) throw new Error('Failed to load chart data');
         const data = (await res.json()) as KlinesResponse;
         if (!active) return;
-        setCandles(data.candles ?? []);
+        const nextCandles = data.candles ?? [];
+        setCandles(nextCandles);
         setResolvedSymbol(data.resolvedSymbol || config.symbol);
         setSourceTag(data.source);
+
+        const latest = nextCandles[nextCandles.length - 1];
+        if (latest && Number.isFinite(latest.close)) {
+          const prevPrice =
+            prevPriceRef.current.symbol === config.symbol ? prevPriceRef.current.price : null;
+          onLivePriceUpdate(config.id, config.symbol, prevPrice, latest.close);
+          prevPriceRef.current = { symbol: config.symbol, price: latest.close };
+        }
       } catch {
         // Keep existing candles if transient refresh error occurs
       } finally {
@@ -100,7 +152,7 @@ export function ChartWindow({
       active = false;
       clearInterval(interval);
     };
-  }, [config.symbol, config.assetType, config.timeframe]);
+  }, [config.id, config.symbol, config.assetType, config.timeframe, onLivePriceUpdate]);
 
   const last = candles[candles.length - 1];
   const baseCandle = candles[Math.max(0, candles.length - 25)] ?? candles[0];
@@ -109,6 +161,9 @@ export function ChartWindow({
       ? ((last.close - baseCandle.open) / baseCandle.open) * 100
       : 0;
   const isPctUp = pctChange >= 0;
+
+  const activeAlertCount = alerts.filter((a) => a.status === 'active').length;
+  const triggeredAlertCount = alerts.filter((a) => a.status === 'triggered').length;
 
   const cycleSyncGroup = () => {
     const idx = SYNC_ORDER.indexOf(config.sync.group);
@@ -166,7 +221,7 @@ export function ChartWindow({
           )}
         </div>
 
-        {/* Right: Sync Group + Indicators + Maximize */}
+        {/* Right: Sync Group + Price Alerts + Indicators + Maximize */}
         <div className="flex items-center gap-1 shrink-0">
           <button
             type="button"
@@ -229,6 +284,38 @@ export function ChartWindow({
             onClick={(e) => {
               e.stopPropagation();
               onFocus();
+              setAlertOverlayOpen((open) => {
+                if (open) setAlertPickMode(false);
+                return !open;
+              });
+            }}
+            aria-expanded={alertOverlayOpen}
+            aria-label={`Manage price alerts for window ${config.index + 1}`}
+            title="Price Alerts"
+            data-testid={`alert-btn-${config.id}`}
+            className={`tv-focusable flex items-center gap-1 px-1.5 py-1 rounded text-[11px] font-mono-num font-semibold transition-colors cursor-pointer ${
+              alertOverlayOpen || alertPickMode
+                ? 'bg-amber-400 text-[#080B11]'
+                : activeAlertCount > 0 || triggeredAlertCount > 0
+                ? 'bg-amber-400/15 text-amber-300 border border-amber-400/45 hover:bg-amber-400/25'
+                : 'text-slate-300 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            {activeAlertCount > 0 || triggeredAlertCount > 0 ? (
+              <BellRing className="w-3.5 h-3.5" />
+            ) : (
+              <Bell className="w-3.5 h-3.5" />
+            )}
+            {(activeAlertCount > 0 || triggeredAlertCount > 0) && (
+              <span>{activeAlertCount > 0 ? activeAlertCount : triggeredAlertCount}</span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onFocus();
               onOpenIndicatorsModal();
             }}
             aria-label={`Indicators for window ${config.index + 1}`}
@@ -276,6 +363,38 @@ export function ChartWindow({
             syncedCrosshairTime={syncedCrosshairTime}
             onCrosshairTimeChange={onCrosshairTimeChange}
             compact={compact}
+            alerts={alerts}
+            alertPickMode={alertPickMode}
+            onPickAlertPrice={(pickedPrice) => {
+              const cond = inferAlertCondition(pickedPrice, last?.close ?? null);
+              onCreateAlert(config.id, config.symbol, {
+                targetPrice: pickedPrice,
+                condition: cond,
+              });
+              setAlertPickMode(false);
+            }}
+          />
+        )}
+
+        {alertOverlayOpen && (
+          <PriceAlertOverlay
+            windowId={config.id}
+            windowIndex={config.index}
+            symbol={resolvedSymbol}
+            currentPrice={last?.close ?? null}
+            alerts={alerts}
+            pickMode={alertPickMode}
+            compact={compact}
+            onTogglePickMode={() => setAlertPickMode((m) => !m)}
+            onCreateAlert={(input) => onCreateAlert(config.id, config.symbol, input)}
+            onTogglePauseAlert={onTogglePauseAlert}
+            onRearmAlert={onRearmAlert}
+            onDeleteAlert={onDeleteAlert}
+            onClearTriggered={() => onClearTriggeredAlerts(config.id, config.symbol)}
+            onClose={() => {
+              setAlertPickMode(false);
+              setAlertOverlayOpen(false);
+            }}
           />
         )}
       </div>

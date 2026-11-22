@@ -1,4 +1,4 @@
-import { Activity, RotateCcw, Settings, ZoomIn, ZoomOut } from 'lucide-react';
+import { Activity, MonitorSmartphone, RotateCcw, Settings, ZoomIn, ZoomOut } from 'lucide-react';
 import { useState } from 'react';
 import type { ChartWindowConfig, LayoutCount } from '../types/trading';
 
@@ -11,6 +11,9 @@ interface TopControlBarProps {
   onOpenSymbolModal: () => void;
   onOpenIndicatorsModal: () => void;
   onOpenSettingsModal: () => void;
+  onOpenDeviceSyncModal: () => void;
+  deviceSyncConnected: boolean;
+  deviceConnectedCount: number;
   onZoomChange: (bars: number) => void;
   onResetView: () => void;
 }
@@ -26,6 +29,9 @@ export function TopControlBar({
   onOpenSymbolModal,
   onOpenIndicatorsModal,
   onOpenSettingsModal,
+  onOpenDeviceSyncModal,
+  deviceSyncConnected,
+  deviceConnectedCount,
   onZoomChange,
   onResetView,
 }: TopControlBarProps) {
@@ -87,7 +93,7 @@ export function TopControlBar({
         })}
       </div>
 
-      {/* Zone 3: TV Zoom Slider + Focused Window Actions + Settings */}
+      {/* Zone 3: TV Zoom Slider + Focused Window Actions + Multi-Device Sync + Settings */}
       <div className="flex items-center gap-2 shrink-0">
         {focusedWindow && (
           <div
@@ -167,6 +173,23 @@ export function TopControlBar({
             </button>
           </>
         )}
+
+        <button
+          type="button"
+          onClick={onOpenDeviceSyncModal}
+          data-testid="device-sync-btn"
+          aria-label="Multi-device push sync and Fire TV APK"
+          title="Multi-Device Live Push & Fire TV APK"
+          className="tv-focusable flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-[#141B29] text-slate-200 border border-slate-700/80 hover:border-slate-500 hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+        >
+          <span
+            className={`w-1.5 h-1.5 rounded-full ${
+              deviceSyncConnected ? 'bg-[#8EE53F]' : 'bg-amber-400'
+            }`}
+          />
+          <MonitorSmartphone className="w-3.5 h-3.5 text-sky-300" />
+          <span className="font-mono-num">{deviceConnectedCount}</span>
+        </button>
 
         <button
           type="button"

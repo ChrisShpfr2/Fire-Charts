@@ -110,6 +110,10 @@ export const DEFAULT_SETTINGS: TerminalSettings = {
     showNewsBar: true,
     newsRotateSec: 8,
   },
+  alerts: {
+    showTriggeredLines: true,
+    soundEnabled: false,
+  },
 };
 
 export function mergeTerminalSettings(
@@ -124,5 +128,6 @@ export function mergeTerminalSettings(
     oscillators: { ...DEFAULT_SETTINGS.oscillators, ...(partial.oscillators ?? {}) },
     divergences: { ...DEFAULT_SETTINGS.divergences, ...(partial.divergences ?? {}) },
     display: { ...DEFAULT_SETTINGS.display, ...(partial.display ?? {}) },
+    alerts: { ...DEFAULT_SETTINGS.alerts, ...(partial.alerts ?? {}) },
   };
 }

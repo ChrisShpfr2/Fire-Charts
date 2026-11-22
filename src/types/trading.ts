@@ -204,4 +204,25 @@ export interface TerminalSettings {
     showNewsBar: boolean;
     newsRotateSec: number;
   };
+  alerts: {
+    showTriggeredLines: boolean;
+    soundEnabled: boolean;
+  };
 }
+
+export type AlertCondition = 'above' | 'below' | 'cross';
+export type AlertStatus = 'active' | 'triggered' | 'paused';
+
+export interface PriceAlert {
+  id: string;
+  windowId: string;
+  symbol: string;
+  targetPrice: number;
+  condition: AlertCondition;
+  status: AlertStatus;
+  note?: string;
+  createdAt: number;
+  triggeredAt?: number;
+  triggeredPrice?: number;
+}
+

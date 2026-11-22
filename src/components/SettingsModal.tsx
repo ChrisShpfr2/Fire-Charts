@@ -152,6 +152,8 @@ export function SettingsModal({
     onChange({ ...settings, divergences: { ...settings.divergences, ...patch } });
   const updateDisplay = (patch: Partial<TerminalSettings['display']>) =>
     onChange({ ...settings, display: { ...settings.display, ...patch } });
+  const updateAlerts = (patch: Partial<TerminalSettings['alerts']>) =>
+    onChange({ ...settings, alerts: { ...settings.alerts, ...patch } });
 
   return (
     <div
@@ -820,6 +822,22 @@ export function SettingsModal({
                 step={2}
                 unit="s"
                 onChange={(v) => updateDisplay({ newsRotateSec: v })}
+              />
+              <ToggleRow
+                label="Show Triggered Price Alert Lines on Chart"
+                hint="Keeps triggered horizontal threshold lines visible in Kiwi Green until re-armed or cleared."
+                checked={settings.alerts.showTriggeredLines}
+                onToggle={() =>
+                  updateAlerts({ showTriggeredLines: !settings.alerts.showTriggeredLines })
+                }
+              />
+              <ToggleRow
+                label="Play Audio Chime When Price Alert Triggers"
+                hint="Emits a subtle two-tone alert chime alongside the TV notification toast."
+                checked={settings.alerts.soundEnabled}
+                onToggle={() =>
+                  updateAlerts({ soundEnabled: !settings.alerts.soundEnabled })
+                }
               />
             </>
           )}

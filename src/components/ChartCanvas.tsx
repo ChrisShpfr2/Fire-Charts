@@ -2,8 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   Candle,
   IndicatorId,
+  PriceAlert,
   TerminalSettings,
 } from '../types/trading';
+import { formatAlertConditionShort, inferAlertCondition } from '../utils/alerts';
 import {
   calculateATR,
   calculateAutoFibonacci,
@@ -30,6 +32,9 @@ interface ChartCanvasProps {
   syncedCrosshairTime: number | null;
   onCrosshairTimeChange: (time: number | null) => void;
   compact: boolean;
+  alerts?: PriceAlert[];
+  alertPickMode?: boolean;
+  onPickAlertPrice?: (price: number) => void;
 }
 
 function formatPrice(price: number): string {
@@ -59,6 +64,9 @@ export function ChartCanvas({
   syncedCrosshairTime,
   onCrosshairTimeChange,
   compact,
+  alerts = [],
+  alertPickMode = false,
+  onPickAlertPrice,
 }: ChartCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -66,7 +74,7 @@ export function ChartCanvas({
   const [size, setSize] = useState({ width: 600, height: 360 });
   const [rightOffset, setRightOffset] = useState(0);
   const [hoverPos, setHoverPos] = useState<{ x: number; y: number } | null>(null);
-  const dragRef = useRef<{ startX: number; startOffset: number } | null>(null);
+  const dragRef = useRef<{ startX: number; startY: number; startOffset: number } | null>(null);
 
   useEffect(() => {
     setRightOffset(0);
@@ -303,6 +311,10 @@ export function ChartCanvas({
       const ratio = (p - minP) / Math.max(maxP - minP, 1e-9);
       return mainH - ratio * (mainH - 14) - 7;
     };
+    const yToPrice = (y: number) => {
+      const ratio = (mainH - 7 - y) / Math.max(mainH - 14, 1);
+      return minP + ratio * (maxP - minP);
+    };
 
     const timeToX = (timeSec: number): number | null => {
       if (total === 0) return null;
@@ -334,6 +346,7 @@ export function ChartCanvas({
       idxToX,
       xToIdx,
       priceToY,
+      yToPrice,
       timeToX,
     };
   }, [candles, zoomBars, rightOffset, size, subPanes, computed, compact, settings.tradersReality.showEmas]);
@@ -366,6 +379,7 @@ export function ChartCanvas({
       barStep,
       idxToX,
       priceToY,
+      yToPrice,
       timeToX,
     } = layout;
 
@@ -899,20 +913,196 @@ export function ChartCanvas({
       );
     }
 
+    // 10. Price Alert Horizontal Lines & Labels
+    const visibleAlerts = alerts.filter(
+      (a) => a.status !== 'triggered' || settings.alerts.showTriggeredLines
+    );
+    const axisAlertBadges: Array<{ y: number; text: string; bg: string; fg: string }> = [];
+
+    if (visibleAlerts.length > 0) {
+      const placedTagYs: number[] = [];
+      const sortedAlerts = [...visibleAlerts].sort((a, b) => b.targetPrice - a.targetPrice);
+      let offTopCount = 0;
+      let offBottomCount = 0;
+
+      for (const alert of sortedAlerts) {
+        const isActive = alert.status === 'active';
+        const isTriggered = alert.status === 'triggered';
+        const lineColor = isActive ? '#F59E0B' : isTriggered ? '#8EE53F' : '#64748B';
+        const textFg = isActive ? '#FDE68A' : isTriggered ? '#8EE53F' : '#94A3B8';
+        const yRaw = priceToY(alert.targetPrice);
+
+        if (yRaw < 4) {
+          if (isActive) offTopCount++;
+          continue;
+        }
+        if (yRaw > mainH - 4) {
+          if (isActive) offBottomCount++;
+          continue;
+        }
+
+        const y = Math.round(yRaw) + 0.5;
+        ctx.save();
+        ctx.strokeStyle = lineColor;
+        ctx.lineWidth = isActive ? 1.6 : 1.2;
+        if (isActive) ctx.setLineDash([6, 4]);
+        else if (alert.status === 'paused') ctx.setLineDash([2, 4]);
+        else ctx.setLineDash([3, 2]);
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(plotW, y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        const condTag = formatAlertConditionShort(alert.condition);
+        const icon = isTriggered ? '✓' : alert.status === 'paused' ? '⏸' : '🔔';
+        const noteSuffix = alert.note && !compact ? ` · ${alert.note}` : '';
+        const pillText = compact
+          ? `${icon} ${formatPrice(alert.targetPrice)}`
+          : `${icon} ${condTag} ${formatPrice(alert.targetPrice)}${noteSuffix}`;
+
+        ctx.font = `bold ${compact ? 9 : 10}px "JetBrains Mono", monospace`;
+        const tw = ctx.measureText(pillText).width;
+        const boxW = tw + 10;
+        const boxH = 14;
+        let tagY = Math.max(4, Math.min(mainH - boxH - 4, y - boxH / 2));
+        for (const prevY of placedTagYs) {
+          if (Math.abs(tagY - prevY) < boxH + 2) {
+            tagY = Math.min(mainH - boxH - 4, prevY + boxH + 2);
+          }
+        }
+        placedTagYs.push(tagY);
+        const boxX = Math.max(8, plotW - boxW - 8);
+
+        ctx.fillStyle = 'rgba(8, 11, 17, 0.92)';
+        ctx.fillRect(boxX, tagY, boxW, boxH);
+        ctx.strokeStyle = lineColor;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(boxX, tagY, boxW, boxH);
+        ctx.fillStyle = textFg;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(pillText, boxX + 5, tagY + boxH / 2);
+        ctx.restore();
+
+        axisAlertBadges.push({
+          y: Math.max(9, Math.min(mainH - 9, y)),
+          text: formatPrice(alert.targetPrice),
+          bg: lineColor,
+          fg: '#080B11',
+        });
+      }
+
+      if (offTopCount > 0) {
+        const label = `▲ ${offTopCount} Alert${offTopCount > 1 ? 's' : ''} Above`;
+        ctx.save();
+        ctx.font = 'bold 9px "JetBrains Mono", monospace';
+        const tw = ctx.measureText(label).width;
+        ctx.fillStyle = 'rgba(8, 11, 17, 0.9)';
+        ctx.fillRect(plotW - tw - 16, 4, tw + 10, 14);
+        ctx.strokeStyle = '#F59E0B';
+        ctx.strokeRect(plotW - tw - 16, 4, tw + 10, 14);
+        ctx.fillStyle = '#FCD34D';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, plotW - tw - 11, 11);
+        ctx.restore();
+      }
+      if (offBottomCount > 0) {
+        const label = `▼ ${offBottomCount} Alert${offBottomCount > 1 ? 's' : ''} Below`;
+        ctx.save();
+        ctx.font = 'bold 9px "JetBrains Mono", monospace';
+        const tw = ctx.measureText(label).width;
+        ctx.fillStyle = 'rgba(8, 11, 17, 0.9)';
+        ctx.fillRect(plotW - tw - 16, mainH - 18, tw + 10, 14);
+        ctx.strokeStyle = '#F59E0B';
+        ctx.strokeRect(plotW - tw - 16, mainH - 18, tw + 10, 14);
+        ctx.fillStyle = '#FCD34D';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, plotW - tw - 11, mainH - 11);
+        ctx.restore();
+      }
+    }
+
+    // Interactive Pick-on-Chart Preview Line
+    if (alertPickMode && hoverPos && hoverPos.x <= plotW && hoverPos.y <= mainH) {
+      const previewPrice = yToPrice(hoverPos.y);
+      const lastClose = candles[candles.length - 1]?.close ?? null;
+      const inferred = inferAlertCondition(previewPrice, lastClose);
+      const py = Math.round(hoverPos.y) + 0.5;
+      ctx.save();
+      ctx.strokeStyle = '#FBBF24';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(0, py);
+      ctx.lineTo(plotW, py);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      const label = `CLICK TO SET ${formatAlertConditionShort(inferred)} ${formatPrice(previewPrice)}`;
+      ctx.font = 'bold 10px "JetBrains Mono", monospace';
+      const tw = ctx.measureText(label).width;
+      const pillX = Math.max(8, Math.min(plotW - tw - 18, hoverPos.x + 12));
+      const pillY = Math.max(4, py - 18);
+      ctx.fillStyle = '#F59E0B';
+      ctx.fillRect(pillX, pillY, tw + 10, 15);
+      ctx.fillStyle = '#080B11';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, pillX + 5, pillY + 7.5);
+      ctx.restore();
+    }
+
     ctx.restore(); // end main plot clip
 
-    // Latest price tag
+    // Latest price tag Y coordinate (computed first so alert axis pills avoid overlapping it)
     const lastCandle = candles[candles.length - 1];
-    if (lastCandle) {
-      const ly = Math.max(10, Math.min(mainH - 10, priceToY(lastCandle.close)));
+    const liveTagY = lastCandle
+      ? Math.max(10, Math.min(mainH - 10, priceToY(lastCandle.close)))
+      : null;
+
+    // Alert Price Axis Tags (de-overlapped against liveTagY and neighboring pills)
+    const placedAxisYs: number[] = liveTagY !== null ? [liveTagY] : [];
+    for (const badge of axisAlertBadges) {
+      let by = badge.y;
+      for (const occupied of placedAxisYs) {
+        if (Math.abs(by - occupied) < 17) {
+          const shiftDown = occupied + 17;
+          const shiftUp = occupied - 17;
+          if (by >= occupied && shiftDown <= mainH - 9) {
+            by = shiftDown;
+          } else if (shiftUp >= 9) {
+            by = shiftUp;
+          } else if (shiftDown <= mainH - 9) {
+            by = shiftDown;
+          }
+        }
+      }
+      if (placedAxisYs.some((occupied) => Math.abs(by - occupied) < 15)) {
+        continue;
+      }
+      placedAxisYs.push(by);
+      ctx.fillStyle = badge.bg;
+      ctx.fillRect(plotW + 2, by - 7.5, priceAxisW - 4, 15);
+      ctx.fillStyle = badge.fg;
+      ctx.font = 'bold 9px "JetBrains Mono", monospace';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(badge.text, plotW + 5, by);
+    }
+
+    // Latest price tag
+    if (lastCandle && liveTagY !== null) {
       const tagColor = lastCandle.close >= lastCandle.open ? upColor : downColor;
       ctx.fillStyle = tagColor;
-      ctx.fillRect(plotW + 2, ly - 9, priceAxisW - 4, 18);
+      ctx.fillRect(plotW + 2, liveTagY - 9, priceAxisW - 4, 18);
       ctx.fillStyle = '#080B11';
       ctx.font = 'bold 10px "JetBrains Mono", monospace';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
-      ctx.fillText(formatPrice(lastCandle.close), plotW + 6, ly);
+      ctx.fillText(formatPrice(lastCandle.close), plotW + 6, liveTagY);
     }
 
     // 9. Sub-Panes Rendering
@@ -1439,6 +1629,8 @@ export function ChartCanvas({
     syncedCrosshairTime,
     compact,
     settings,
+    alerts,
+    alertPickMode,
   ]);
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -1446,7 +1638,7 @@ export function ChartCanvas({
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
-    if (dragRef.current) {
+    if (dragRef.current && !alertPickMode) {
       const dx = x - dragRef.current.startX;
       const barShift = Math.round(dx / Math.max(layout.barStep, 2));
       const maxOffset = Math.max(0, candles.length - 15);
@@ -1462,11 +1654,34 @@ export function ChartCanvas({
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
-    dragRef.current = { startX: e.clientX - rect.left, startOffset: rightOffset };
+    dragRef.current = {
+      startX: e.clientX - rect.left,
+      startY: e.clientY - rect.top,
+      startOffset: rightOffset,
+    };
   };
 
-  const handleMouseUp = () => {
+  const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const moved = dragRef.current
+      ? Math.hypot(x - dragRef.current.startX, y - dragRef.current.startY)
+      : 0;
     dragRef.current = null;
+
+    if (
+      onPickAlertPrice &&
+      (alertPickMode || e.shiftKey) &&
+      moved < 6 &&
+      x <= layout.plotW &&
+      y <= layout.mainH
+    ) {
+      const picked = layout.yToPrice(y);
+      if (Number.isFinite(picked) && picked > 0) {
+        onPickAlertPrice(picked);
+      }
+    }
   };
 
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
@@ -1504,8 +1719,14 @@ export function ChartCanvas({
           onCrosshairTimeChange(null);
         }}
         onWheel={handleWheel}
-        className="w-full h-full block cursor-crosshair"
+        className={`w-full h-full block ${alertPickMode ? 'cursor-cell' : 'cursor-crosshair'}`}
       />
+
+      {alertPickMode && (
+        <div className="pointer-events-none absolute top-1.5 right-[72px] z-10 px-2 py-0.5 rounded bg-amber-400 text-[#080B11] text-[10px] font-bold shadow">
+          Click on chart to place alert line
+        </div>
+      )}
 
       {hoveredCandle && (
         <div className="pointer-events-none absolute top-1.5 left-2 flex flex-col items-start gap-1">

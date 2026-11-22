@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { AlertToastStack, type AlertToastItem } from './components/AlertToastStack';
 import { BreakingNewsBar } from './components/BreakingNewsBar';
 import { ChartWindow } from './components/ChartWindow';
+import { DeviceSyncModal } from './components/DeviceSyncModal';
 import { IndicatorsModal } from './components/IndicatorsModal';
 import { NewsDetailModal } from './components/NewsDetailModal';
 import { SettingsModal } from './components/SettingsModal';
@@ -8,26 +10,38 @@ import { SymbolTimeframeModal } from './components/SymbolTimeframeModal';
 import { TopControlBar } from './components/TopControlBar';
 import { WallStreetTicker } from './components/WallStreetTicker';
 import type {
+  AlertCondition,
   AssetType,
   ChartWindowConfig,
   IndicatorId,
   LayoutCount,
   NewsArticle,
+  PriceAlert,
   SymbolOption,
   TerminalSettings,
   TickerTapeItem,
   Timeframe,
   WindowSyncConfig,
 } from './types/trading';
+import {
+  checkAndTriggerAlerts,
+  createPriceAlert,
+  getAlertsForWindow,
+  playAlertChime,
+} from './utils/alerts';
 import { DEFAULT_SETTINGS, mergeTerminalSettings } from './utils/settings';
 import {
+  canonicalSymbolKey,
   getGridGeometry,
   propagateIndicatorsToGroup,
   propagateZoomToGroup,
 } from './utils/sync';
+import type { SyncedWorkspaceState } from './utils/deviceSync';
+import { useDeviceSync } from './utils/useDeviceSync';
 
 const STORAGE_KEY = 'apex-tv-4k-workspace-v3';
 const SETTINGS_STORAGE_KEY = 'apex-tv-4k-settings-v1';
+const ALERTS_STORAGE_KEY = 'apex-tv-4k-alerts-v1';
 
 const DEFAULT_WINDOWS: ChartWindowConfig[] = [
   {
@@ -224,13 +238,39 @@ function loadSavedSettings(): TerminalSettings {
   }
 }
 
+function loadSavedAlerts(): PriceAlert[] {
+  try {
+    const raw = localStorage.getItem(ALERTS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (a): a is PriceAlert =>
+        Boolean(a) &&
+        typeof a.id === 'string' &&
+        typeof a.windowId === 'string' &&
+        typeof a.symbol === 'string' &&
+        typeof a.targetPrice === 'number' &&
+        Number.isFinite(a.targetPrice)
+    );
+  } catch {
+    return [];
+  }
+}
+
 export default function App() {
   const initial = useMemo(() => loadSavedWorkspace(), []);
   const initialSettings = useMemo(() => loadSavedSettings(), []);
+  const initialAlerts = useMemo(() => loadSavedAlerts(), []);
 
   const [layoutCount, setLayoutCount] = useState<LayoutCount>(initial.layoutCount);
   const [windows, setWindows] = useState<ChartWindowConfig[]>(initial.windows);
   const [settings, setSettings] = useState<TerminalSettings>(initialSettings);
+  const [alerts, setAlerts] = useState<PriceAlert[]>(initialAlerts);
+  const [alertToasts, setAlertToasts] = useState<AlertToastItem[]>([]);
+  const [latestPriceByWindow, setLatestPriceByWindow] = useState<
+    Record<string, { symbol: string; price: number }>
+  >({});
 
   const [focusedWindowId, setFocusedWindowId] = useState<string>(initial.windows[0].id);
   const [maximizedWindowId, setMaximizedWindowId] = useState<string | null>(null);
@@ -246,12 +286,46 @@ export default function App() {
   const [symbolModalOpen, setSymbolModalOpen] = useState(false);
   const [indicatorsModalOpen, setIndicatorsModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [deviceSyncModalOpen, setDeviceSyncModalOpen] = useState(false);
+  const [remoteSyncNotice, setRemoteSyncNotice] = useState<string | null>(null);
   const [newsModalState, setNewsModalState] = useState<{
     open: boolean;
     article?: NewsArticle;
   }>({ open: false });
 
   const [crosshairByGroup, setCrosshairByGroup] = useState<Record<string, number | null>>({});
+
+  const handleApplyRemoteState = useCallback((remote: SyncedWorkspaceState) => {
+    if (
+      typeof remote.layoutCount === 'number' &&
+      remote.layoutCount >= 1 &&
+      remote.layoutCount <= 12
+    ) {
+      setLayoutCount(remote.layoutCount);
+    }
+    if (Array.isArray(remote.windows) && remote.windows.length === 12) {
+      setWindows(sanitizeWindows(remote.windows));
+    }
+    if (remote.settings && typeof remote.settings === 'object') {
+      setSettings(mergeTerminalSettings(remote.settings));
+    }
+    if (Array.isArray(remote.alerts)) {
+      setAlerts(remote.alerts);
+    }
+  }, []);
+
+  const handleRemoteNotice = useCallback((msg: string) => {
+    setRemoteSyncNotice(msg);
+    setTimeout(() => {
+      setRemoteSyncNotice((prev) => (prev === msg ? null : prev));
+    }, 2600);
+  }, []);
+
+  const deviceSync = useDeviceSync({
+    currentState: { layoutCount, windows, settings, alerts },
+    onApplyRemoteState: handleApplyRemoteState,
+    onRemoteSyncNotice: handleRemoteNotice,
+  });
 
   // Persist workspace state
   useEffect(() => {
@@ -270,6 +344,15 @@ export default function App() {
       // Ignore storage quota issues
     }
   }, [settings]);
+
+  // Persist alerts
+  useEffect(() => {
+    try {
+      localStorage.setItem(ALERTS_STORAGE_KEY, JSON.stringify(alerts));
+    } catch {
+      // Ignore storage quota issues
+    }
+  }, [alerts]);
 
   // Fetch symbols catalog
   useEffect(() => {
@@ -361,12 +444,19 @@ export default function App() {
         if (symbolModalOpen) setSymbolModalOpen(false);
         else if (indicatorsModalOpen) setIndicatorsModalOpen(false);
         else if (settingsModalOpen) setSettingsModalOpen(false);
+        else if (deviceSyncModalOpen) setDeviceSyncModalOpen(false);
         else if (newsModalState.open) setNewsModalState({ open: false });
         else if (maximizedWindowId) setMaximizedWindowId(null);
         return;
       }
 
-      if (symbolModalOpen || indicatorsModalOpen || settingsModalOpen || newsModalState.open) {
+      if (
+        symbolModalOpen ||
+        indicatorsModalOpen ||
+        settingsModalOpen ||
+        deviceSyncModalOpen ||
+        newsModalState.open
+      ) {
         return;
       }
 
@@ -457,6 +547,123 @@ export default function App() {
     setResetOffsetSignal((n) => n + 1);
   }, [focusedWindow, handleZoomChange, settings.candles.defaultZoomBars]);
 
+  const emitTriggeredToasts = useCallback(
+    (triggered: PriceAlert[]) => {
+      if (triggered.length === 0) return;
+      if (settings.alerts.soundEnabled) {
+        playAlertChime();
+      }
+      const newItems: AlertToastItem[] = triggered.map((alert) => {
+        const win = windows.find((w) => w.id === alert.windowId);
+        return {
+          toastId: `toast-${alert.id}-${Date.now()}`,
+          alert,
+          windowIndex: win?.index ?? 0,
+          timeframe: win?.timeframe ?? '',
+        };
+      });
+      setAlertToasts((prev) => [...newItems, ...prev].slice(0, 4));
+      for (const item of newItems) {
+        setTimeout(() => {
+          setAlertToasts((prev) => prev.filter((t) => t.toastId !== item.toastId));
+        }, 12000);
+      }
+    },
+    [windows, settings.alerts.soundEnabled]
+  );
+
+  const handleLivePriceUpdate = useCallback(
+    (windowId: string, symbol: string, prevPrice: number | null, currentPrice: number) => {
+      setLatestPriceByWindow((prev) => {
+        const existing = prev[windowId];
+        if (existing && existing.symbol === symbol && existing.price === currentPrice) {
+          return prev;
+        }
+        return { ...prev, [windowId]: { symbol, price: currentPrice } };
+      });
+
+      setAlerts((prev) => {
+        const res = checkAndTriggerAlerts(prev, windowId, symbol, prevPrice, currentPrice);
+        if (!res.changed) return prev;
+        queueMicrotask(() => emitTriggeredToasts(res.newlyTriggered));
+        return res.nextAlerts;
+      });
+    },
+    [emitTriggeredToasts]
+  );
+
+  const handleCreateAlert = useCallback(
+    (
+      windowId: string,
+      symbol: string,
+      input: { targetPrice: number; condition: AlertCondition; note?: string }
+    ) => {
+      const created = createPriceAlert({
+        windowId,
+        symbol,
+        targetPrice: input.targetPrice,
+        condition: input.condition,
+        note: input.note,
+      });
+
+      const live = latestPriceByWindow[windowId];
+      if (live && canonicalSymbolKey(live.symbol) === canonicalSymbolKey(symbol)) {
+        const res = checkAndTriggerAlerts([created], windowId, symbol, live.price, live.price);
+        if (res.changed) {
+          setAlerts((prev) => [res.nextAlerts[0], ...prev]);
+          emitTriggeredToasts(res.newlyTriggered);
+          return;
+        }
+      }
+
+      setAlerts((prev) => [created, ...prev]);
+    },
+    [latestPriceByWindow, emitTriggeredToasts]
+  );
+
+  const handleTogglePauseAlert = useCallback((alertId: string) => {
+    setAlerts((prev) =>
+      prev.map((a) =>
+        a.id === alertId
+          ? { ...a, status: a.status === 'paused' ? 'active' : 'paused' }
+          : a
+      )
+    );
+  }, []);
+
+  const handleRearmAlert = useCallback((alertId: string) => {
+    setAlerts((prev) =>
+      prev.map((a) =>
+        a.id === alertId
+          ? {
+              ...a,
+              status: 'active',
+              triggeredAt: undefined,
+              triggeredPrice: undefined,
+            }
+          : a
+      )
+    );
+  }, []);
+
+  const handleDeleteAlert = useCallback((alertId: string) => {
+    setAlerts((prev) => prev.filter((a) => a.id !== alertId));
+  }, []);
+
+  const handleClearTriggeredAlerts = useCallback((windowId: string, symbol: string) => {
+    const key = canonicalSymbolKey(symbol);
+    setAlerts((prev) =>
+      prev.filter(
+        (a) =>
+          !(
+            a.windowId === windowId &&
+            canonicalSymbolKey(a.symbol) === key &&
+            a.status === 'triggered'
+          )
+      )
+    );
+  }, []);
+
   return (
     <div className="w-screen h-screen bg-[#080B11] text-slate-100 flex flex-col overflow-hidden">
       {/* 1. Rolling Wall Street Ticker Banner */}
@@ -482,7 +689,7 @@ export default function App() {
         />
       )}
 
-      {/* 3. Top Control Bar (Logo + 1-12 Window Selector + Zoom Slider + Settings) */}
+      {/* 3. Top Control Bar (Logo + 1-12 Window Selector + Zoom Slider + Multi-Device Sync + Settings) */}
       <TopControlBar
         layoutCount={layoutCount}
         onChangeLayoutCount={handleChangeLayoutCount}
@@ -492,11 +699,46 @@ export default function App() {
         onOpenSymbolModal={() => setSymbolModalOpen(true)}
         onOpenIndicatorsModal={() => setIndicatorsModalOpen(true)}
         onOpenSettingsModal={() => setSettingsModalOpen(true)}
+        onOpenDeviceSyncModal={() => setDeviceSyncModalOpen(true)}
+        deviceSyncConnected={deviceSync.connected}
+        deviceConnectedCount={deviceSync.connectedCount}
         onZoomChange={(bars) => {
           if (focusedWindow) handleZoomChange(focusedWindow.id, bars);
         }}
         onResetView={handleResetView}
       />
+
+      {/* OTA App Update Banner (pushed from server/deploy/device to all Fire TVs) */}
+      {deviceSync.otaUpdateNotice && (
+        <div
+          role="status"
+          data-testid="ota-update-banner"
+          className="bg-sky-500/20 border-b border-sky-400/50 px-4 py-1.5 flex items-center justify-between gap-3 text-xs shrink-0"
+        >
+          <span className="font-medium text-sky-100">
+            Update pushed ({deviceSync.otaUpdateNotice.reason}) — refreshing terminal in{' '}
+            <strong className="font-mono-num text-[#8EE53F]">
+              {deviceSync.otaUpdateNotice.secondsRemaining}s
+            </strong>
+          </span>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="tv-focusable px-2.5 py-0.5 rounded bg-[#8EE53F] text-[#080B11] font-bold cursor-pointer"
+            >
+              Update Now
+            </button>
+            <button
+              type="button"
+              onClick={deviceSync.dismissOtaNotice}
+              className="tv-focusable px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:text-white cursor-pointer"
+            >
+              Later
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 4. 1 to 12 Window Multi-Chart Grid */}
       <main
@@ -511,12 +753,14 @@ export default function App() {
         {visibleWindows.map((win) => {
           const groupKey = win.sync.group !== 'none' && win.sync.syncCrosshair ? win.sync.group : null;
           const syncedCrosshairTime = groupKey ? crosshairByGroup[groupKey] ?? null : null;
+          const windowAlerts = getAlertsForWindow(alerts, win.id, win.symbol);
 
           return (
             <ChartWindow
               key={win.id}
               config={win}
               settings={settings}
+              alerts={windowAlerts}
               resetOffsetSignal={resetOffsetSignal}
               isFocused={focusedWindow?.id === win.id}
               isMaximized={maximizedWindowId === win.id}
@@ -542,6 +786,12 @@ export default function App() {
                   prev[groupKey] === time ? prev : { ...prev, [groupKey]: time }
                 );
               }}
+              onCreateAlert={handleCreateAlert}
+              onTogglePauseAlert={handleTogglePauseAlert}
+              onRearmAlert={handleRearmAlert}
+              onDeleteAlert={handleDeleteAlert}
+              onClearTriggeredAlerts={handleClearTriggeredAlerts}
+              onLivePriceUpdate={handleLivePriceUpdate}
             />
           );
         })}
@@ -583,11 +833,46 @@ export default function App() {
         onChange={setSettings}
       />
 
+      <DeviceSyncModal
+        isOpen={deviceSyncModalOpen}
+        roomId={deviceSync.roomId}
+        connected={deviceSync.connected}
+        connectedCount={deviceSync.connectedCount}
+        revision={deviceSync.revision}
+        autoSyncEnabled={deviceSync.autoSyncEnabled}
+        onChangeRoomId={deviceSync.setRoomId}
+        onToggleAutoSync={deviceSync.toggleAutoSync}
+        onPushWorkspaceNow={deviceSync.pushWorkspaceNow}
+        onPushAppReload={deviceSync.pushAppReloadToAllDevices}
+        onClose={() => setDeviceSyncModalOpen(false)}
+      />
+
       <NewsDetailModal
         isOpen={newsModalState.open}
         articles={newsArticles}
         initialArticle={newsModalState.article}
         onClose={() => setNewsModalState({ open: false })}
+      />
+
+      {remoteSyncNotice && (
+        <div
+          role="status"
+          data-testid="remote-sync-toast"
+          className="fixed bottom-4 left-4 z-50 px-3 py-2 rounded-lg bg-[#0F172A]/95 border border-sky-400/50 text-xs font-medium text-sky-200 shadow-xl"
+        >
+          {remoteSyncNotice}
+        </div>
+      )}
+
+      <AlertToastStack
+        toasts={alertToasts}
+        onFocusWindow={(winId) => {
+          setFocusedWindowId(winId);
+          setAlertToasts((prev) => prev.filter((t) => t.alert.windowId !== winId));
+        }}
+        onDismiss={(toastId) =>
+          setAlertToasts((prev) => prev.filter((t) => t.toastId !== toastId))
+        }
       />
     </div>
   );
