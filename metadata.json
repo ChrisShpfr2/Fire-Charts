@@ -1,0 +1,6 @@
+{
+  "name": "Apex 4K Financial TV",
+  "description": "Amazon Fire TV 4K multi-window financial charting terminal with rolling Wall Street ticker, live breaking financial news, 1 to 12 synchronized chart windows, custom timeframes, Traders Reality Main, VuManChu WaveTrend & Money Flow, Stoch RSI, and Binance .P fallback.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
